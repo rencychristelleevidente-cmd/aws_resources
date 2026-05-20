@@ -1,6 +1,6 @@
 variable "bucket_name" {
-  type        = string
-  default     = "testing-s3-bucket"
+  type    = string
+  default = "testing-s3-bucket"
 }
 
 variable "region" {
@@ -12,7 +12,7 @@ variable "region" {
 variable "tags" {
   description = "Tags for the bucket"
   type        = map(string)
-  default     = {
+  default = {
     Environment = "dev"
     Project     = "terraform-s3"
   }
