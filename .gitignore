@@ -1,0 +1,15 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.log
+*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ignore provider binaries
+terraform_bootstrap/.terraform/
+aws_resources/.terraform/
