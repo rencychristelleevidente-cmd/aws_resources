@@ -1,5 +1,6 @@
 locals {
-  prefix = lower("${var.repo_name}-terraform-state-${var.branch_name}")
+  clean_repo = replace(lower(var.repo_name), "_", "-")
+  prefix     = "${local.clean_repo}-${var.branch_name}"
 }
 
 resource "aws_s3_bucket" "terraform_state" {
