@@ -133,11 +133,11 @@ jobs:
       ########################################################
 
       - name: Terraform Format Check
-        working-directory: aws-resource
+        working-directory: ./aws-resource
         run: terraform fmt -check
 
       - name: Terraform Init
-        working-directory: aws-resource
+        working-directory: ./aws-resource
         run: |
           terraform init \
             -backend-config="bucket=$TF_BUCKET" \
@@ -146,14 +146,14 @@ jobs:
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
       - name: Terraform Validate
-        working-directory: aws-resource
+        working-directory: ./aws-resource
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: aws-resource
+        working-directory: ./aws-resource
         run: terraform plan -input=false -out=tfplan
 
       - name: Terraform Apply
-        working-directory: aws-resource
+        working-directory: ./aws-resource
         if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve tfplan
