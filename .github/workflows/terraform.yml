@@ -109,7 +109,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: aws_resources
+        working-directory: aws-resource
 
     steps:
       ########################################################
