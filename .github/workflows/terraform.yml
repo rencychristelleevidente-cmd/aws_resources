@@ -1,17 +1,26 @@
-name: 'Terraform'
+name: Terraform
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
 
 permissions:
   contents: read
 
+env:
+  AWS_REGION: ap-southeast-1
+  TF_BUCKET: ${{ github.event.repository.name }}-terraform-state
+  TF_LOCK_TABLE: ${{ github.event.repository.name }}-terraform-lock
+
 jobs:
 
+  ############################################################
+  # BOOTSTRAP BACKEND
+  ############################################################
   bootstrap:
-    name: Terraform Bootstrap
+    name: Bootstrap Terraform Backend
     runs-on: ubuntu-latest
     environment: production
 
@@ -20,32 +29,65 @@ jobs:
         working-directory: terraform_bootstrap
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-southeast-1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Terraform Init
-      run: terraform init
+      ########################################################
+      # CHECK IF BACKEND EXISTS
+      ########################################################
+      - name: Check Backend Resources
+        id: backend-check
+        run: |
+          echo "Checking S3 bucket..."
 
-    - name: Terraform Apply Bootstrap
-      run: |
-        terraform apply -auto-approve -input=false \
-          -var="repo_name=${{ github.event.repository.name }}" \
-          -var="branch_name=${{ github.ref_name }}"
+          if aws s3api head-bucket --bucket "$TF_BUCKET" 2>/dev/null; then
+            echo "bucket_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "bucket_exists=false" >> $GITHUB_OUTPUT
+          fi
 
+          echo "Checking DynamoDB table..."
+
+          if aws dynamodb describe-table \
+            --table-name "$TF_LOCK_TABLE" \
+            --region "$AWS_REGION" \
+            >/dev/null 2>&1; then
+            echo "table_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "table_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      ########################################################
+      # CREATE BACKEND ONLY IF MISSING
+      ########################################################
+      - name: Terraform Init
+        if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
+        run: terraform init
+
+      - name: Terraform Apply Bootstrap
+        if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
+        run: |
+          terraform apply -auto-approve -input=false \
+            -var="bucket_name=$TF_BUCKET" \
+            -var="lock_table_name=$TF_LOCK_TABLE"
+
+  ############################################################
+  # MAIN TERRAFORM DEPLOYMENT
+  ############################################################
   terraform:
-    name: Terraform AWS Resources
+    name: Deploy AWS Infrastructure
     runs-on: ubuntu-latest
-    needs: bootstrap   # 🔥 ensures bootstrap runs first
+    needs: bootstrap
     environment: production
 
     defaults:
@@ -53,38 +95,63 @@ jobs:
         working-directory: aws_resources
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    # 🔥 DEBUG STEP
-    - name: Debug folder structure
-      run: |
-        pwd
-        ls -R
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-southeast-1
+      ########################################################
+      # OPTIONAL DEBUGGING
+      ########################################################
+      - name: Debug Folder Structure
+        run: |
+          pwd
+          ls -la
+          ls -R
 
-    - name: Terraform Format
-      run: terraform fmt -check
+      ########################################################
+      # TERRAFORM FORMAT CHECK
+      ########################################################
+      - name: Terraform Format Check
+        run: terraform fmt -check
 
-    - name: Terraform Init
-      run: |
-        terraform init \
-          -backend-config="bucket=${{ github.event.repository.name }}-terraform-state-${{ github.ref_name }}" \
-          -backend-config="key=terraform.tfstate" \
-          -backend-config="region=ap-southeast-1"
+      ########################################################
+      # TERRAFORM INIT
+      ########################################################
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_BUCKET" \
+            -backend-config="key=${{ github.ref_name }}/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
-    - name: Terraform Plan
-      run: terraform plan -input=false -var="branch_name=${{ github.ref_name }}"
+      ########################################################
+      # TERRAFORM VALIDATE
+      ########################################################
+      - name: Terraform Validate
+        run: terraform validate
 
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve -input=false -var="branch_name=${{ github.ref_name }}"
+      ########################################################
+      # TERRAFORM PLAN
+      ########################################################
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -input=false \
+            -out=tfplan
+
+      ########################################################
+      # TERRAFORM APPLY
+      ########################################################
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve tfplan
