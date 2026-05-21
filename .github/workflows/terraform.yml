@@ -11,8 +11,6 @@ permissions:
 
 env:
   AWS_REGION: ap-southeast-1
-  TF_BUCKET: ${{ github.event.repository.name }}-terraform-state
-  TF_LOCK_TABLE: ${{ github.event.repository.name }}-terraform-lock
 
 jobs:
 
@@ -29,12 +27,31 @@ jobs:
         working-directory: terraform_bootstrap
 
     steps:
+      ########################################################
+      # CHECKOUT
+      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      ########################################################
+      # SANITIZE BACKEND NAMES
+      ########################################################
+      - name: Generate Backend Names
+        run: |
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+
+          echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
+          echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+
+      ########################################################
+      # TERRAFORM
+      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      ########################################################
+      # AWS AUTH
+      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -48,7 +65,7 @@ jobs:
       - name: Check Backend Resources
         id: backend-check
         run: |
-          echo "Checking S3 bucket..."
+          echo "Checking S3 bucket: $TF_BUCKET"
 
           if aws s3api head-bucket --bucket "$TF_BUCKET" 2>/dev/null; then
             echo "bucket_exists=true" >> $GITHUB_OUTPUT
@@ -56,7 +73,7 @@ jobs:
             echo "bucket_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "Checking DynamoDB table..."
+          echo "Checking DynamoDB table: $TF_LOCK_TABLE"
 
           if aws dynamodb describe-table \
             --table-name "$TF_LOCK_TABLE" \
@@ -68,7 +85,7 @@ jobs:
           fi
 
       ########################################################
-      # CREATE BACKEND ONLY IF MISSING
+      # CREATE BACKEND IF MISSING
       ########################################################
       - name: Terraform Init
         if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
@@ -95,12 +112,31 @@ jobs:
         working-directory: aws_resources
 
     steps:
+      ########################################################
+      # CHECKOUT
+      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      ########################################################
+      # SANITIZE BACKEND NAMES
+      ########################################################
+      - name: Generate Backend Names
+        run: |
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+
+          echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
+          echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+
+      ########################################################
+      # TERRAFORM
+      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      ########################################################
+      # AWS AUTH
+      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -109,7 +145,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       ########################################################
-      # OPTIONAL DEBUGGING
+      # DEBUG
       ########################################################
       - name: Debug Folder Structure
         run: |
@@ -118,7 +154,7 @@ jobs:
           ls -R
 
       ########################################################
-      # TERRAFORM FORMAT CHECK
+      # FORMAT CHECK
       ########################################################
       - name: Terraform Format Check
         run: terraform fmt -check
@@ -135,13 +171,13 @@ jobs:
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
       ########################################################
-      # TERRAFORM VALIDATE
+      # VALIDATE
       ########################################################
       - name: Terraform Validate
         run: terraform validate
 
       ########################################################
-      # TERRAFORM PLAN
+      # PLAN
       ########################################################
       - name: Terraform Plan
         run: |
@@ -150,7 +186,7 @@ jobs:
             -out=tfplan
 
       ########################################################
-      # TERRAFORM APPLY
+      # APPLY
       ########################################################
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
