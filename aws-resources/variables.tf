@@ -22,9 +22,9 @@ variable "instance_type" {
   default = "t2.micro"
 }
 
-variable "bucket_name" {
-  type = string
-}
+# variable "bucket_name" {
+#   type = string
+# }
 
 # variable "lock_table_name" {
 #   type = string
