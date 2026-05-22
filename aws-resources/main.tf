@@ -26,4 +26,5 @@ locals {
   bucket_name = "${var.base_name}-${var.branch_name}"
   app_name = "${var.base_name}-${var.branch_name}"
   subnet_prefix = "${var.base_name}-${var.branch_name}"
+  lock_table_name = "${local.app_name}-lock"
 }
