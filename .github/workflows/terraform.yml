@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      - dev
+      - 'feature/**'
   pull_request:
 
 permissions:
@@ -27,12 +29,21 @@ jobs:
         working-directory: terraform_bootstrap
 
     steps:
+      ########################################################
+      # CHECKOUT
+      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      ########################################################
+      # SETUP TERRAFORM
+      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      ########################################################
+      # AWS AUTH
+      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,15 +52,21 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       ########################################################
-      # SAFE BACKEND NAME GENERATION (FIXED)
+      # SANITIZE REPO + BRANCH NAMES
       ########################################################
       - name: Generate Backend Names
         working-directory: ${{ github.workspace }}
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr '/' '-' \
+            | tr '_' '-')
+
           echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
       ########################################################
       # CHECK BACKEND EXISTENCE
@@ -73,7 +90,7 @@ jobs:
           fi
 
       ########################################################
-      # CREATE BACKEND ONLY IF MISSING
+      # CREATE BACKEND IF MISSING
       ########################################################
       - name: Terraform Init
         if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
@@ -96,12 +113,21 @@ jobs:
     environment: production
 
     steps:
+      ########################################################
+      # CHECKOUT
+      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      ########################################################
+      # SETUP TERRAFORM
+      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      ########################################################
+      # AWS AUTH
+      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -110,18 +136,24 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       ########################################################
-      # GENERATE BACKEND NAMES (FIXED)
+      # SANITIZE REPO + BRANCH NAMES
       ########################################################
       - name: Generate Backend Names
         working-directory: ${{ github.workspace }}
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr '/' '-' \
+            | tr '_' '-')
+
           echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
       ########################################################
-      # DEBUG (SAFE)
+      # DEBUG
       ########################################################
       - name: Debug Folder Structure
         run: |
@@ -129,31 +161,50 @@ jobs:
           ls -R
 
       ########################################################
-      # TERRAFORM STEPS (FIXED DIRECTORY)
+      # TERRAFORM FORMAT
       ########################################################
-
       - name: Terraform Format Check
         working-directory: aws-resources
         run: terraform fmt -check
 
+      ########################################################
+      # TERRAFORM INIT
+      ########################################################
       - name: Terraform Init
         working-directory: aws-resources
         run: |
           terraform init \
             -backend-config="bucket=$TF_BUCKET" \
-            -backend-config="key=${{ github.ref_name }}/terraform.tfstate" \
+            -backend-config="key=$SAFE_BRANCH/terraform.tfstate" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
+      ########################################################
+      # TERRAFORM VALIDATE
+      ########################################################
       - name: Terraform Validate
         working-directory: aws-resources
         run: terraform validate
 
+      ########################################################
+      # TERRAFORM PLAN
+      ########################################################
       - name: Terraform Plan
         working-directory: aws-resources
-        run: terraform plan -input=false -out=tfplan
+        run: |
+          terraform plan \
+            -input=false \
+            -var="branch_name=$SAFE_BRANCH" \
+            -out=tfplan
 
+      ########################################################
+      # TERRAFORM APPLY
+      ########################################################
       - name: Terraform Apply
+        if: github.event_name == 'push'
         working-directory: aws-resources
-        if: github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve tfplan
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false \
+            tfplan
