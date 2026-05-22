@@ -6,9 +6,9 @@ module "s3" {
 }
 
 module "vpc" {
-  source = "./modules/vpc"
-  base_name    = var.base_name
-  branch_name  = var.branch_name
+  source        = "./modules/vpc"
+  base_name     = var.base_name
+  branch_name   = var.branch_name
   subnet_prefix = local.subnet_prefix
 }
 
@@ -23,8 +23,8 @@ module "ec2" {
 }
 
 locals {
-  bucket_name = "${var.base_name}-${var.branch_name}"
-  app_name = "${var.base_name}-${var.branch_name}"
-  subnet_prefix = "${var.base_name}-${var.branch_name}"
+  bucket_name     = "${var.base_name}-${var.branch_name}"
+  app_name        = "${var.base_name}-${var.branch_name}"
+  subnet_prefix   = "${var.base_name}-${var.branch_name}"
   lock_table_name = "${local.app_name}-lock"
 }
