@@ -1,4 +1,4 @@
-name: Terraform
+name: Terraform Deploy
 
 on:
   push:
@@ -6,7 +6,22 @@ on:
       - main
       - dev
       - 'feature-**'
-  pull_request:
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+      confirm_destroy:
+        description: "Type DESTROY if action is destroy"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,21 +44,12 @@ jobs:
         working-directory: terraform_bootstrap
 
     steps:
-      ########################################################
-      # CHECKOUT
-      ########################################################
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      ########################################################
-      # SETUP TERRAFORM
-      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      ########################################################
-      # AWS AUTH
-      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -51,83 +57,61 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      ########################################################
-      # SANITIZE REPO + BRANCH NAMES
-      ########################################################
       - name: Generate Backend Names
-        working-directory: ${{ github.workspace }}
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-
-          SAFE_BRANCH=$(echo "${{ github.ref_name }}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | tr '/' '-' \
-            | tr '_' '-')
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
 
           echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-      ########################################################
-      # CHECK BACKEND EXISTENCE
-      ########################################################
-      - name: Check Backend Resources
-        id: backend-check
+      - name: Check Backend
+        id: check
         run: |
-          if aws s3api head-bucket --bucket "$TF_BUCKET" 2>/dev/null; then
-            echo "bucket_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "bucket_exists=false" >> $GITHUB_OUTPUT
-          fi
+          aws s3api head-bucket --bucket "$TF_BUCKET" && echo "bucket=true" >> $GITHUB_OUTPUT || echo "bucket=false" >> $GITHUB_OUTPUT
+          aws dynamodb describe-table --table-name "$TF_LOCK_TABLE" --region "$AWS_REGION" \
+            && echo "table=true" >> $GITHUB_OUTPUT || echo "table=false" >> $GITHUB_OUTPUT
 
-          if aws dynamodb describe-table \
-            --table-name "$TF_LOCK_TABLE" \
-            --region "$AWS_REGION" \
-            >/dev/null 2>&1; then
-            echo "table_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "table_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      ########################################################
-      # CREATE BACKEND IF MISSING
-      ########################################################
       - name: Terraform Init
-        if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
+        if: steps.check.outputs.bucket == 'false' || steps.check.outputs.table == 'false'
         run: terraform init
 
       - name: Terraform Apply Bootstrap
-        if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
+        if: steps.check.outputs.bucket == 'false' || steps.check.outputs.table == 'false'
         run: |
-          terraform apply -auto-approve -input=false \
+          terraform apply -auto-approve \
             -var="bucket_name=$TF_BUCKET" \
             -var="lock_table_name=$TF_LOCK_TABLE"
 
   ############################################################
-  # MAIN TERRAFORM DEPLOYMENT
+  # DEPLOY (APPLY ONLY)
   ############################################################
-  terraform:
+  deploy:
     name: Deploy AWS Infrastructure
     runs-on: ubuntu-latest
     needs: bootstrap
     environment: production
 
+    # Runs on push OR manual apply
+    if: |
+      github.event_name == 'push' ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.action == 'apply'
+      )
+
+    defaults:
+      run:
+        working-directory: aws-resources
+
     steps:
-      ########################################################
-      # CHECKOUT
-      ########################################################
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      ########################################################
-      # SETUP TERRAFORM
-      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      ########################################################
-      # AWS AUTH
-      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -135,41 +119,82 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      ########################################################
-      # SANITIZE REPO + BRANCH NAMES
-      ########################################################
       - name: Generate Backend Names
-        working-directory: ${{ github.workspace }}
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-
-          SAFE_BRANCH=$(echo "${{ github.ref_name }}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | tr '/' '-' \
-            | tr '_' '-')
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
 
           echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-      ########################################################
-      # DEBUG
-      ########################################################
-      - name: Debug Folder Structure
+      - name: Terraform Init
         run: |
-          pwd
-          ls -R
+          terraform init \
+            -backend-config="bucket=$TF_BUCKET" \
+            -backend-config="key=$SAFE_BRANCH/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
-      ########################################################
-      # TERRAFORM FORMAT
-      ########################################################
-      - name: Terraform Format Check
-        working-directory: aws-resources
-        run: terraform fmt -check
+      - name: Terraform Validate
+        run: terraform validate
 
-      ########################################################
-      # TERRAFORM INIT
-      ########################################################
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan -input=false -var="branch_name=$SAFE_BRANCH"
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+  ############################################################
+  # DESTROY (SAFE MANUAL ONLY)
+  ############################################################
+  destroy:
+    name: Destroy AWS Infrastructure
+    runs-on: ubuntu-latest
+    needs: bootstrap
+    environment: production
+
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'destroy'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Destroy Confirmation
+        shell: bash
+        run: |
+          CONFIRM="${{ github.event.inputs.confirm_destroy }}"
+
+          echo "Confirm value: '$CONFIRM'"
+
+          if [ "$CONFIRM" != "DESTROY" ]; then
+            echo "❌ You must type DESTROY exactly"
+            exit 1
+          fi
+
+          echo "✅ Confirmed"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate Backend Names
+        run: |
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr '_' '-')
+
+          echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
+          echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
+
       - name: Terraform Init
         working-directory: aws-resources
         run: |
@@ -179,32 +204,10 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
-      ########################################################
-      # TERRAFORM VALIDATE
-      ########################################################
-      - name: Terraform Validate
+      - name: Terraform Plan Destroy
         working-directory: aws-resources
-        run: terraform validate
+        run: terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
 
-      ########################################################
-      # TERRAFORM PLAN
-      ########################################################
-      - name: Terraform Plan
+      - name: Terraform Destroy
         working-directory: aws-resources
-        run: |
-          terraform plan \
-            -input=false \
-            -var="branch_name=$SAFE_BRANCH" \
-            -out=tfplan
-
-      ########################################################
-      # TERRAFORM APPLY
-      ########################################################
-      - name: Terraform Apply
-        if: github.event_name == 'push'
-        working-directory: aws-resources
-        run: |
-          terraform apply \
-            -auto-approve \
-            -input=false \
-            tfplan
+        run: terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
