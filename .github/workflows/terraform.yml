@@ -20,11 +20,6 @@ on:
           - apply
           - destroy
 
-      confirm_destroy:
-        description: "Type DESTROY to confirm resource deletion"
-        required: false
-        default: ""
-
 permissions:
   contents: read
 
@@ -106,27 +101,22 @@ jobs:
   # MAIN TERRAFORM DEPLOYMENT
   ############################################################
   terraform:
-    name: Deploy or Destroy AWS Infrastructure
+    name: Deploy AWS Infrastructure
     runs-on: ubuntu-latest
     needs: bootstrap
     environment: production
 
+    if: |
+      github.event_name == 'push' ||
+      github.event.inputs.action == 'apply'
+
     steps:
-      ########################################################
-      # CHECKOUT
-      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      ########################################################
-      # SETUP TERRAFORM
-      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      ########################################################
-      # AWS AUTH
-      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -134,9 +124,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      ########################################################
-      # SANITIZE REPO + BRANCH NAMES
-      ########################################################
       - name: Generate Backend Names
         working-directory: ${{ github.workspace }}
         run: |
@@ -151,16 +138,10 @@ jobs:
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-      ########################################################
-      # TERRAFORM FORMAT
-      ########################################################
       - name: Terraform Format Check
         working-directory: aws-resources
         run: terraform fmt -check
 
-      ########################################################
-      # TERRAFORM INIT
-      ########################################################
       - name: Terraform Init
         working-directory: aws-resources
         run: |
@@ -170,18 +151,11 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
-      ########################################################
-      # TERRAFORM VALIDATE
-      ########################################################
       - name: Terraform Validate
         working-directory: aws-resources
         run: terraform validate
 
-      ########################################################
-      # TERRAFORM PLAN
-      ########################################################
       - name: Terraform Plan
-        if: github.event.inputs.action != 'destroy'
         working-directory: aws-resources
         run: |
           terraform plan \
@@ -189,11 +163,7 @@ jobs:
             -var="branch_name=$SAFE_BRANCH" \
             -out=tfplan
 
-      ########################################################
-      # TERRAFORM APPLY
-      ########################################################
       - name: Terraform Apply
-        if: github.event_name == 'push' || github.event.inputs.action == 'apply'
         working-directory: aws-resources
         run: |
           terraform apply \
@@ -201,33 +171,72 @@ jobs:
             -input=false \
             tfplan
 
-      ########################################################
-      # VALIDATE DESTROY CONFIRMATION
-      ########################################################
-      - name: Validate Destroy Confirmation
-        if: github.event.inputs.action == 'destroy'
-        run: |
-          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
-            echo "Destroy confirmation failed."
-            echo "You must type DESTROY exactly."
-            exit 1
-          fi
+  ############################################################
+  # TERRAFORM DESTROY
+  ############################################################
+  destroy:
+    name: Destroy AWS Infrastructure
+    runs-on: ubuntu-latest
+    needs: bootstrap
 
-      ########################################################
-      # TERRAFORM DESTROY PLAN
-      ########################################################
+    if: github.event.inputs.action == 'destroy'
+
+    ##########################################################
+    # IMPORTANT:
+    # Create GitHub Environment:
+    # destroy-approval
+    #
+    # Add Required Reviewers
+    #
+    # This creates the manual approval button
+    ##########################################################
+    environment:
+      name: destroy-approval
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate Backend Names
+        working-directory: ${{ github.workspace }}
+        run: |
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+
+          SAFE_BRANCH=$(echo "${{ github.ref_name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | tr '/' '-' \
+            | tr '_' '-')
+
+          echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
+          echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        working-directory: aws-resources
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_BUCKET" \
+            -backend-config="key=$SAFE_BRANCH/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$TF_LOCK_TABLE"
+
       - name: Terraform Destroy Plan
-        if: github.event.inputs.action == 'destroy'
         working-directory: aws-resources
         run: |
           terraform plan -destroy \
             -var="branch_name=$SAFE_BRANCH"
 
-      ########################################################
-      # TERRAFORM DESTROY
-      ########################################################
       - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
         working-directory: aws-resources
         run: |
           terraform destroy \
