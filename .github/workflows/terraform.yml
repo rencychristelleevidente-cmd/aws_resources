@@ -6,7 +6,24 @@ on:
       - main
       - dev
       - 'feature-**'
+
   pull_request:
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Choose terraform action"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+      confirm_destroy:
+        description: "Type DESTROY to confirm resource deletion"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,21 +46,12 @@ jobs:
         working-directory: terraform_bootstrap
 
     steps:
-      ########################################################
-      # CHECKOUT
-      ########################################################
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      ########################################################
-      # SETUP TERRAFORM
-      ########################################################
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      ########################################################
-      # AWS AUTH
-      ########################################################
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -51,9 +59,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      ########################################################
-      # SANITIZE REPO + BRANCH NAMES
-      ########################################################
       - name: Generate Backend Names
         working-directory: ${{ github.workspace }}
         run: |
@@ -68,9 +73,6 @@ jobs:
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-      ########################################################
-      # CHECK BACKEND EXISTENCE
-      ########################################################
       - name: Check Backend Resources
         id: backend-check
         run: |
@@ -89,9 +91,6 @@ jobs:
             echo "table_exists=false" >> $GITHUB_OUTPUT
           fi
 
-      ########################################################
-      # CREATE BACKEND IF MISSING
-      ########################################################
       - name: Terraform Init
         if: steps.backend-check.outputs.bucket_exists == 'false' || steps.backend-check.outputs.table_exists == 'false'
         run: terraform init
@@ -107,7 +106,7 @@ jobs:
   # MAIN TERRAFORM DEPLOYMENT
   ############################################################
   terraform:
-    name: Deploy AWS Infrastructure
+    name: Deploy or Destroy AWS Infrastructure
     runs-on: ubuntu-latest
     needs: bootstrap
     environment: production
@@ -153,14 +152,6 @@ jobs:
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
       ########################################################
-      # DEBUG
-      ########################################################
-      - name: Debug Folder Structure
-        run: |
-          pwd
-          ls -R
-
-      ########################################################
       # TERRAFORM FORMAT
       ########################################################
       - name: Terraform Format Check
@@ -190,6 +181,7 @@ jobs:
       # TERRAFORM PLAN
       ########################################################
       - name: Terraform Plan
+        if: github.event.inputs.action != 'destroy'
         working-directory: aws-resources
         run: |
           terraform plan \
@@ -201,10 +193,44 @@ jobs:
       # TERRAFORM APPLY
       ########################################################
       - name: Terraform Apply
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event.inputs.action == 'apply'
         working-directory: aws-resources
         run: |
           terraform apply \
             -auto-approve \
             -input=false \
             tfplan
+
+      ########################################################
+      # VALIDATE DESTROY CONFIRMATION
+      ########################################################
+      - name: Validate Destroy Confirmation
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "Destroy confirmation failed."
+            echo "You must type DESTROY exactly."
+            exit 1
+          fi
+
+      ########################################################
+      # TERRAFORM DESTROY PLAN
+      ########################################################
+      - name: Terraform Destroy Plan
+        if: github.event.inputs.action == 'destroy'
+        working-directory: aws-resources
+        run: |
+          terraform plan -destroy \
+            -var="branch_name=$SAFE_BRANCH"
+
+      ########################################################
+      # TERRAFORM DESTROY
+      ########################################################
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: aws-resources
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -input=false \
+            -var="branch_name=$SAFE_BRANCH"
