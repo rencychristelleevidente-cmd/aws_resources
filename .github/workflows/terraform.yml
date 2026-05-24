@@ -165,11 +165,18 @@ jobs:
 
     steps:
       - name: Validate Destroy Confirmation
+        shell: bash
         run: |
-          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
-            echo "❌ Destroy blocked: you must type DESTROY"
+          CONFIRM="${{ github.event.inputs.confirm_destroy }}"
+
+          echo "Confirm value: $CONFIRM"
+
+          if [[ "$CONFIRM" != "DESTROY" ]]; then
+            echo "❌ You must type DESTROY exactly"
             exit 1
           fi
+
+          echo "✅ Confirmed"
 
       - name: Checkout
         uses: actions/checkout@v4
