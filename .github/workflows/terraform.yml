@@ -176,13 +176,10 @@ jobs:
 
           echo "✅ Confirmed"
 
-      - name: Locate Terraform Root (DEBUG FIX)
+      - name: Detect Terraform Root
         run: |
-          echo "Finding terraform root..."
+          echo "Finding Terraform root..."
           find . -name "*.tf" -type f
-
-      - name: Set working directory safely
-        run: echo "TF_DIR=aws-resources/aws-resources" >> $GITHUB_ENV
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -202,6 +199,9 @@ jobs:
           echo "TF_BUCKET=${REPO_NAME}-terraform-state" >> $GITHUB_ENV
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
+
+          # IMPORTANT: set correct root ONLY ONCE
+          echo "TF_DIR=aws-resources/aws-resources" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
