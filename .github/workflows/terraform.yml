@@ -176,9 +176,9 @@ jobs:
 
           echo "✅ Confirmed"
 
-      - name: Detect Terraform Root
+      - name: Locate Terraform Root
         run: |
-          echo "Finding Terraform root..."
+          echo "Searching terraform files..."
           find . -name "*.tf" -type f
 
       - name: Setup Terraform
@@ -200,12 +200,12 @@ jobs:
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-          # IMPORTANT: set correct root ONLY ONCE
+          # IMPORTANT: your real terraform root
           echo "TF_DIR=aws-resources/aws-resources" >> $GITHUB_ENV
 
       - name: Terraform Init
-        working-directory: ${{ env.TF_DIR }}
         run: |
+          cd $TF_DIR
           terraform init \
             -backend-config="bucket=$TF_BUCKET" \
             -backend-config="key=$SAFE_BRANCH/terraform.tfstate" \
@@ -213,9 +213,11 @@ jobs:
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
       - name: Terraform Plan Destroy
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
+        run: |
+          cd $TF_DIR
+          terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
 
       - name: Terraform Destroy
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
+        run: |
+          cd $TF_DIR
+          terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
