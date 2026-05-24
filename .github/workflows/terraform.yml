@@ -176,11 +176,6 @@ jobs:
 
           echo "✅ Confirmed"
 
-      - name: Locate Terraform Root
-        run: |
-          echo "Searching terraform files..."
-          find . -name "*.tf" -type f
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
@@ -200,12 +195,9 @@ jobs:
           echo "TF_LOCK_TABLE=${REPO_NAME}-terraform-lock" >> $GITHUB_ENV
           echo "SAFE_BRANCH=${SAFE_BRANCH}" >> $GITHUB_ENV
 
-          # IMPORTANT: your real terraform root
-          echo "TF_DIR=aws-resources/aws-resources" >> $GITHUB_ENV
-
       - name: Terraform Init
+        working-directory: aws-resources
         run: |
-          cd $TF_DIR
           terraform init \
             -backend-config="bucket=$TF_BUCKET" \
             -backend-config="key=$SAFE_BRANCH/terraform.tfstate" \
@@ -213,11 +205,9 @@ jobs:
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
       - name: Terraform Plan Destroy
-        run: |
-          cd $TF_DIR
-          terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
+        working-directory: aws-resources
+        run: terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
 
       - name: Terraform Destroy
-        run: |
-          cd $TF_DIR
-          terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
+        working-directory: aws-resources
+        run: terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
