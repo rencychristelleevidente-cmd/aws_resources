@@ -161,7 +161,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: aws-resources
+        working-directory: aws-resources/aws-resources
 
     steps:
       - name: Validate Destroy Confirmation
