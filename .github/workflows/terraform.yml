@@ -164,22 +164,35 @@ jobs:
         working-directory: aws-resources/aws-resources
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Validate Destroy Confirmation
         shell: bash
         run: |
           CONFIRM="${{ github.event.inputs.confirm_destroy }}"
 
-          echo "Confirm value: $CONFIRM"
+          echo "Confirm value: '$CONFIRM'"
 
-          if [[ "$CONFIRM" != "DESTROY" ]]; then
+          if [ "$CONFIRM" != "DESTROY" ]; then
             echo "❌ You must type DESTROY exactly"
             exit 1
           fi
 
           echo "✅ Confirmed"
 
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Safety Check - Verify Terraform Root
+        run: |
+          echo "Checking Terraform files..."
+          ls -la
+
+          if [ ! -f "main.tf" ]; then
+            echo "❌ ERROR: main.tf not found in working directory"
+            echo "Current directory is wrong!"
+            exit 1
+          fi
+
+          echo "✅ Terraform root verified"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -209,7 +222,9 @@ jobs:
             -backend-config="dynamodb_table=$TF_LOCK_TABLE"
 
       - name: Terraform Plan Destroy
-        run: terraform plan -destroy -var="branch_name=$SAFE_BRANCH"
+        run: |
+          terraform plan -destroy -input=false -var="branch_name=$SAFE_BRANCH"
 
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve -var="branch_name=$SAFE_BRANCH"
+        run: |
+          terraform destroy -auto-approve -input=false -var="branch_name=$SAFE_BRANCH"
